@@ -223,10 +223,11 @@
         .btn-edit:hover { background: var(--hover-bg); }
 
         /* 学习页 */
-        .study-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .study-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; position: relative; }
         
         .mode-toggle {
             background: var(--border); padding: 3px; border-radius: 20px; display: flex;
+            position: absolute; left: 50%; transform: translateX(-50%);
         }
         .mode-btn {
             padding: 5px 15px; border: none; background: transparent; border-radius: 15px;
@@ -265,8 +266,9 @@
             display: flex; flex-direction: column; overflow: hidden;
         }
         .flashcard-content { flex: 1; min-height: 0; overflow: auto; padding: 40px; }
-        .card-term { font-size: 2.2em; color: var(--secondary); margin-bottom: 30px; text-align: center; font-weight: bold; letter-spacing: 1px;}
-        .card-answer { 
+        .card-term { font-size: 2.2em; color: var(--secondary); margin-bottom: 5px; text-align: center; font-weight: bold; letter-spacing: 1px;}
+        .card-tags { text-align: center; font-size: 0.85em; color: var(--text-secondary); margin-bottom: 25px; opacity: 0.8; }
+        .card-answer {  
             font-size: 1.1em; color: var(--text); background: var(--bg); padding: 25px; 
             border-radius: 8px; margin-bottom: 20px; display: none; line-height: 1.8;
             border-left: 4px solid var(--primary);
@@ -618,8 +620,11 @@
                     <button class="mode-btn active" id="btn-mode-study" onclick="switchStudyMode('study')">学习</button>
                     <button class="mode-btn" id="btn-mode-review" onclick="switchStudyMode('review')">复习</button>
                 </div>
+                
+                <!-- AI精灵按钮 -->
+                <button class="ai-genius-btn" onclick="openAIGenius()">AI精灵</button>
 
-                <h3 id="current-deck-title" style="margin:0; color:var(--primary);">课程名</h3>
+                <h3 id="current-deck-title" style="display: none;">课程名</h3>
             </div>
             
             <!-- 统计数据栏 -->
@@ -648,6 +653,7 @@
 
                     <div id="study-card-container">
                         <div class="card-term" id="card-term">加载中...</div>
+                        <div class="card-tags" id="card-tags" style="display:none"></div>
                         
                         <!-- AI 功能按钮区 (移至上方) -->
                         <div class="ai-actions-top">
@@ -1085,7 +1091,9 @@
 
                     const dbData = await dbFile.async("uint8array");
                     const sqliteDb = new SQL.Database(dbData);
-                    const res = sqliteDb.exec("SELECT flds FROM notes"); 
+                    // 查询 notes 表，获取 flds (字段内容) 和 tags (标签)
+                    // tags 在 notes 表中是空格分隔的字符串
+                    const res = sqliteDb.exec("SELECT flds, tags FROM notes"); 
                     
                     if (res.length > 0) {
                         let deckId;
@@ -1103,11 +1111,33 @@
                         const now = new Date().getTime();
 
                         res[0].values.forEach(row => {
+                            // row[0] 是 flds, row[1] 是 tags
                             const fields = row[0].split(String.fromCharCode(31));
                             const term = fields[0] ? fields[0].replace(/<[^>]+>/g, '') : "未知";
                             const desc = fields[2] ? fields[2] : (fields[1] || "");
+                            
+                            // 解析 tags
+                            // 解析 tags
+                            let tags = [];
+                            if (row[1]) {
+                                // Anki 官方的 tags 列
+                                tags = row[1].trim().split(/\s+/).filter(t => t);
+                            }
+                            
+                            // 💡 关键修复：如果卡片有 3 个以上的字段，说明 fields[1] 很可能是“分类”
+                            if (fields[2] && fields[1]) {
+                                // 提取纯文本并加入到 tags 中
+                                const categoryText = fields[1].replace(/<[^>]+>/g, '').trim();
+                                if (categoryText) {
+                                    tags.push(categoryText);
+                                }
+                            }
+
                             if (term) {
-                                cardsToAdd.push({ deckId, term, desc, nextReviewDate: 0, interval: 0, easeFactor: 2.5, reps: 0 });
+                                cardsToAdd.push({ 
+                                    deckId, term, desc, tags, // 保存 tags
+                                    nextReviewDate: 0, interval: 0, easeFactor: 2.5, reps: 0 
+                                });
                             }
                         });
 
@@ -1357,9 +1387,26 @@
             const card = currentStudyList[currentCardIndex];
             const termEl = document.getElementById('card-term');
             termEl.innerText = card.term;
+            
+            // 显示 Tags
+            const tagsEl = document.getElementById('card-tags');
+            if (card.tags && card.tags.length > 0) {
+                // 过滤掉空 tag
+                const validTags = card.tags.filter(t => t);
+                if (validTags.length > 0) {
+                    tagsEl.innerText = `《${validTags.join(' / ')}》`;
+                    tagsEl.style.display = 'block';
+                } else {
+                    tagsEl.style.display = 'none';
+                }
+            } else {
+                tagsEl.style.display = 'none';
+            }
+
             termEl.onclick = null;
             termEl.style.cursor = 'default';
-            document.getElementById('card-answer').innerHTML = card.desc;
+            // document.getElementById('card-answer').innerHTML = card.desc;
+            renderAnswerContent(card.desc);
             
             document.getElementById('stage-prompt').style.display = 'none';
             document.getElementById('semantic-panel').style.display = 'none';
@@ -1651,7 +1698,11 @@
                 if (card.aiExplanation) {
                     dsBox.innerHTML = `
                         <div class="ai-header" onclick="toggleAI(this)">
-                            <strong>🧠 DeepSeek 解析 (缓存)</strong> <span class="toggle-icon">▼</span>
+                            <strong>🧠 DeepSeek 解析 (缓存)</strong> 
+                            <span class="header-right">
+                                <span class="cache-trash" onclick="event.stopPropagation(); clearCardCache('deepseek')" title="清除缓存">🗑️</span>
+                                <span class="toggle-icon">▼</span>
+                            </span>
                         </div>
                         <div class="ai-body">${card.aiExplanation.replace(/\n/g, '<br>')}</div>
                     `;
@@ -1670,7 +1721,11 @@
                     const explanation = data.text;
                     dsBox.innerHTML = `
                         <div class="ai-header" onclick="toggleAI(this)">
-                            <strong>🧠 DeepSeek 解析</strong> <span class="toggle-icon">▼</span>
+                            <strong>🧠 DeepSeek 解析</strong> 
+                            <span class="header-right">
+                                <span class="cache-trash" onclick="event.stopPropagation(); clearCardCache('deepseek')" title="清除缓存">🗑️</span>
+                                <span class="toggle-icon">▼</span>
+                            </span>
                         </div>
                         <div class="ai-body">${explanation.replace(/\n/g, '<br>')}</div>
                     `;
@@ -1979,6 +2034,212 @@
             document.getElementById('timer-display').innerText = `${m}:${s}`;
         }
     </script>
+    <!-- AI精灵对话框 -->
+    <div id="ai-chat-modal" class="modal">
+        <div class="modal-content chat-modal-content">
+            <div class="modal-header">
+                <h3>🤖 AI精灵</h3>
+                <span style="cursor:pointer;font-size:1.5em" onclick="closeAIGenius()">×</span>
+            </div>
+            <div id="chat-history" class="chat-history">
+                <div class="chat-msg ai-msg">你好！我是你的中药学AI助教。有什么关于中药的问题都可以问我哦~</div>
+            </div>
+            <div class="chat-input-area">
+                <input type="text" id="chat-input" placeholder="输入问题..." onkeypress="if(event.key==='Enter') sendAIChat()">
+                <button onclick="sendAIChat()">发送</button>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        /* AI精灵按钮 */
+        .ai-genius-btn {
+            background: linear-gradient(135deg, #673AB7, #512DA8);
+            color: white; border: none; padding: 5px 12px; border-radius: 20px;
+            font-size: 0.9em; cursor: pointer; display: flex; align-items: center; gap: 5px;
+            box-shadow: 0 2px 5px var(--shadow); transition: transform 0.2s;
+            margin-left: 10px;
+        }
+        .ai-genius-btn:hover { transform: scale(1.05); }
+
+        /* 聊天窗口样式 */
+        .chat-modal-content {
+            width: 500px; height: 600px; display: flex; flex-direction: column;
+            padding: 0; overflow: hidden;
+        }
+        .chat-history {
+            flex: 1; overflow-y: auto; padding: 20px; background: var(--bg);
+            display: flex; flex-direction: column; gap: 15px;
+        }
+        .chat-msg {
+            max-width: 80%; padding: 10px 15px; border-radius: 15px; line-height: 1.5; font-size: 0.95em;
+        }
+        .ai-msg {
+            background: white; align-self: flex-start; border-bottom-left-radius: 2px;
+            box-shadow: 0 1px 3px var(--shadow); color: #333;
+        }
+        .user-msg {
+            background: var(--primary); color: white; align-self: flex-end; border-bottom-right-radius: 2px;
+            box-shadow: 0 1px 3px var(--shadow);
+        }
+        .chat-input-area {
+            padding: 15px; background: var(--card-bg); border-top: 1px solid var(--border);
+            display: flex; gap: 10px;
+        }
+        .chat-input-area input { flex: 1; padding: 10px; border-radius: 20px; border: 1px solid var(--border); outline: none; }
+        .chat-input-area button {
+            background: var(--primary); color: white; border: none; padding: 0 20px;
+            border-radius: 20px; cursor: pointer;
+        }
+
+        /* 编辑按钮 */
+        .edit-answer-btn {
+            float: right; background: transparent; border: none; cursor: pointer; font-size: 1.2em; opacity: 0.6;
+        }
+        .edit-answer-btn:hover { opacity: 1; transform: scale(1.1); }
+        .edit-textarea {
+            width: 100%; min-height: 150px; padding: 10px; margin-bottom: 10px;
+            border: 1px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 1em;
+            resize: vertical;
+        }
+        .edit-actions { text-align: right; gap: 10px; display: flex; justify-content: flex-end; }
+    </style>
+
+    <script>
+        // AI精灵逻辑
+        function openAIGenius() {
+            document.getElementById('ai-chat-modal').style.display = 'flex';
+            // 如果是空历史，可以不清理，保留上下文
+        }
+        function closeAIGenius() {
+            document.getElementById('ai-chat-modal').style.display = 'none';
+        }
+        async function sendAIChat() {
+            const input = document.getElementById('chat-input');
+            const msg = input.value.trim();
+            if (!msg) return;
+
+            // 添加用户消息
+            appendChatMsg('user', msg);
+            input.value = '';
+
+            // 调用 Worker
+            const workerUrl = document.getElementById('workerUrl').value.trim();
+            if (!workerUrl) {
+                appendChatMsg('ai', '⚠️ 请先在设置中配置 Worker 地址');
+                return;
+            }
+
+            // 构造上下文 (简单的把最近几条带上，或者只带当前问题)
+            // 这里为了简单，我们把历史记录都带上给 Worker?
+            // Worker 里的 chat 接口接受 messages 数组
+            
+            // 获取当前聊天记录构建 context
+            const historyDiv = document.getElementById('chat-history');
+            const msgs = [];
+            // 简单的遍历获取文本是不够的，我们需要角色。
+            // 这里简化：每次发请求把当前对话历史转成 messages 数组
+            // 但 DOM 操作比较麻烦，我们只发当前问题 + 简单的系统提示，或者我们在 JS 里维护一个 chatHistory 数组
+            
+            // 简单实现：只发当前问题，上下文靠 Worker (Worker 是无状态的，所以必须带上下文)
+            // 我们从 DOM 反推上下文
+            const chatBubbles = historyDiv.querySelectorAll('.chat-msg');
+            const contextMessages = [];
+            chatBubbles.forEach(bubble => {
+                const role = bubble.classList.contains('user-msg') ? 'user' : 'assistant';
+                contextMessages.push({ role: role, content: bubble.innerText });
+            });
+            // 注意：appendChatMsg 是在 DOM 上加了，所以上面已经包含了最新的一条 user msg
+            
+            // 显示 loading
+            const loadingId = appendChatMsg('ai', 'Thinking...');
+            
+            try {
+                const res = await fetch(workerUrl, {
+                    method: 'POST',
+                    body: JSON.stringify({ 
+                        action: 'chat', 
+                        messages: contextMessages
+                    })
+                });
+                const data = await res.json();
+                
+                // 移除 loading
+                const loadingEl = document.getElementById(loadingId);
+                if (loadingEl) loadingEl.remove();
+
+                if (data.error) throw new Error(data.error);
+                appendChatMsg('ai', data.text);
+            } catch (err) {
+                const loadingEl = document.getElementById(loadingId);
+                if (loadingEl) loadingEl.innerText = '⚠️ 请求失败: ' + err.message;
+            }
+        }
+
+        function appendChatMsg(role, text) {
+            const div = document.createElement('div');
+            div.className = `chat-msg ${role === 'user' ? 'user-msg' : 'ai-msg'}`;
+            // 简单的 markdown 渲染支持? 这里先纯文本，或者简单的 replace \n
+            div.innerHTML = text.replace(/\n/g, '<br>');
+            const history = document.getElementById('chat-history');
+            history.appendChild(div);
+            history.scrollTop = history.scrollHeight;
+            div.id = 'msg-' + Date.now();
+            return div.id;
+        }
+
+        // 编辑答案逻辑
+        function editCurrentAnswer() {
+            const card = currentStudyList[currentCardIndex];
+            const container = document.getElementById('card-answer');
+            const currentHtml = card.desc; // 原始 HTML
+            
+            // 简单的把 <br> 转回 \n 用于编辑
+            let text = currentHtml.replace(/<br\s*\/?>/gi, '\n');
+            // 去除可能存在的 wrapper div (如果之前保存过)
+            // 暂不处理复杂 HTML，假设主要是文本
+            
+            container.innerHTML = `
+                <textarea id="edit-answer-input" class="edit-textarea">${text}</textarea>
+                <div class="edit-actions">
+                    <button class="nav-btn" onclick="cancelEditAnswer()">取消</button>
+                    <button class="nav-btn primary" onclick="saveEditAnswer()">保存</button>
+                </div>
+            `;
+        }
+
+        function cancelEditAnswer() {
+            const card = currentStudyList[currentCardIndex];
+            // 恢复显示
+            renderAnswerContent(card.desc);
+        }
+
+        async function saveEditAnswer() {
+            const newText = document.getElementById('edit-answer-input').value;
+            // 转回 HTML
+            const newHtml = newText.replace(/\n/g, '<br>');
+            
+            const card = currentStudyList[currentCardIndex];
+            card.desc = newHtml;
+            
+            // 更新数据库
+            await db.cards.update(card.id, { desc: newHtml });
+            
+            // 恢复显示
+            renderAnswerContent(newHtml);
+        }
+
+        function renderAnswerContent(html) {
+            const container = document.getElementById('card-answer');
+            container.innerHTML = `
+                <div style="position:relative">
+                    ${html}
+                    <button class="edit-answer-btn" onclick="editCurrentAnswer()" title="修改答案">✏️</button>
+                </div>
+            `;
+        }
+    </script>
 </body>
 </html>
+
 
