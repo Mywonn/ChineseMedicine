@@ -153,7 +153,18 @@
         }
         @keyframes modalIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
-        .modal-header { display: flex; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px;}
+        .modal-header { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; /* 新增：让内部元素垂直居中 */
+            margin-bottom: 20px; 
+            border-bottom: 1px solid var(--border); 
+            padding-bottom: 10px;
+        }
+        
+        .modal-header h3 { 
+            margin: 0; /* 新增：去掉标题默认的上下边距，防止撑乱布局 */
+        }
         .form-group { margin-bottom: 15px; }
         .form-group label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 0.9em; color: var(--text-secondary); }
         .form-group input { 
@@ -1595,6 +1606,14 @@
             document.querySelector('.score-bar').style.display = 'flex';
 
             const card = currentStudyList[currentCardIndex];
+
+            if (card.aiExplanation) {
+                callWorker('deepseek', true); // 加了 true
+            }
+            if (card.bingImage) {
+                callWorker('bing', true);     // 加了 true
+            }
+
             let intForget = 1, intHard = 1, intGood = 1;
 
             if (card.reps === 0) {
@@ -1683,7 +1702,7 @@
         }
 
         // ================= Worker 调用 =================
-        async function callWorker(actionType) {
+        async function callWorker(actionType, autoCollapse = false) {
             const workerUrl = document.getElementById('workerUrl').value.trim();
             const card = currentStudyList[currentCardIndex];
             const currentTerm = card.term;
@@ -1696,15 +1715,19 @@
                 
                 // 1. 检查本地缓存
                 if (card.aiExplanation) {
+                    // 根据是否自动调用，决定图标和折叠状态
+                    const iconState = autoCollapse ? '▶' : '▼';
+                    const bodyClass = autoCollapse ? 'ai-body collapsed' : 'ai-body';
+                    
                     dsBox.innerHTML = `
                         <div class="ai-header" onclick="toggleAI(this)">
                             <strong>🧠 DeepSeek 解析 (缓存)</strong> 
                             <span class="header-right">
                                 <span class="cache-trash" onclick="event.stopPropagation(); clearCardCache('deepseek')" title="清除缓存">🗑️</span>
-                                <span class="toggle-icon">▼</span>
+                                <span class="toggle-icon">${iconState}</span>
                             </span>
                         </div>
-                        <div class="ai-body">${card.aiExplanation.replace(/\n/g, '<br>')}</div>
+                        <div class="${bodyClass}">${card.aiExplanation.replace(/\n/g, '<br>')}</div>
                     `;
                     return;
                 }
@@ -1753,17 +1776,20 @@
 
                 const imgsHtml = images.map(url => `<img src="${url}" class="zoomable-img" alt="原图">`).join('');
                 
+                // 根据是否自动调用，决定图标和折叠状态
+                const iconState = autoCollapse ? '▶' : '▼';
+                const bodyClass = autoCollapse ? 'ai-body collapsed' : 'ai-body';
+                
                 bingBox.innerHTML = `
                     <div class="ai-header" onclick="toggleAI(this)">
                         <strong>🌿 参考原图 (缓存)</strong> 
                         <span class="header-right">
                             <span class="cache-trash" onclick="event.stopPropagation(); clearCardCache('bing')" title="清除缓存">🗑️</span>
-                            <span class="toggle-icon">▼</span>
+                            <span class="toggle-icon">${iconState}</span>
                         </span>
                     </div>
-                    <div class="ai-body">
+                    <div class="${bodyClass}">
                         <div class="image-grid">${imgsHtml}</div>
-                        <!-- 百度搜图按钮 -->
                         <button class="baidu-search-btn" style="display:block" onclick="openBaiduImageSearch()">🔍 百度搜图</button>
                     </div>
                 `;
@@ -2035,7 +2061,7 @@
         }
     </script>
     <!-- AI精灵对话框 -->
-    <div id="ai-chat-modal" class="modal">
+    <div id="ai-chat-modal" class="modal" onclick="if(event.target === this) closeAIGenius()">
         <div class="modal-content chat-modal-content">
             <div class="modal-header">
                 <h3>🤖 AI精灵</h3>
@@ -2055,10 +2081,14 @@
         /* AI精灵按钮 */
         .ai-genius-btn {
             background: linear-gradient(135deg, #673AB7, #512DA8);
-            color: white; border: none; padding: 5px 12px; border-radius: 20px;
-            font-size: 0.9em; cursor: pointer; display: flex; align-items: center; gap: 5px;
+            color: white; border: none; 
+            padding: 6px 16px; /* 增大内边距，使按钮变大 */
+            border-radius: 20px;
+            font-size: 0.95em; /* 稍微增大字体 */
+            font-weight: bold;
+            cursor: pointer; display: flex; align-items: center; gap: 5px;
             box-shadow: 0 2px 5px var(--shadow); transition: transform 0.2s;
-            margin-left: 10px;
+            margin-left: auto; /* 确保按钮靠右对齐 */
         }
         .ai-genius-btn:hover { transform: scale(1.05); }
 
@@ -2066,6 +2096,11 @@
         .chat-modal-content {
             width: 500px; height: 600px; display: flex; flex-direction: column;
             padding: 0; overflow: hidden;
+        }
+        /* 调整AI精灵弹窗头部的边距 */
+        .chat-modal-content .modal-header {
+            padding: 5px 20px 5px 20px; /* 增加上、右、下、左的内边距 */
+            margin-bottom: 0;
         }
         .chat-history {
             flex: 1; overflow-y: auto; padding: 20px; background: var(--bg);
